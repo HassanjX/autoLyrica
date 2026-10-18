@@ -1,0 +1,39 @@
+# Visual Studio / MSVC
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.opendb
+
+# Build & Output
+build/
+bin/
+obj/
+out/
+Release/
+Debug/
+x64/
+x86/
+
+# Distribution packages (binaries published in GitHub Releases)
+dist/
+*.7z
+*.zip
+
+# Whisper models (downloaded in-app via ModelManager)
+models/*.bin
+*.bin
+
+# Temporary & Logs
+*.log
+*.tmp
+
+# User test media
+tests/*.mp3
+tests/*.wav
+tests/*.flac
+tests/*.m4a
