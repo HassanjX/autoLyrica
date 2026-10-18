@@ -37,7 +37,24 @@ void AppUI::init() {
             }
         }
     }
-    m_status_message = "Ready. Open an audio file to begin.";
+
+    // Auto-download model on startup if no model exists on this computer
+    if (!m_models.has_any_model()) {
+        m_status_message = "First launch: Auto-downloading standard model (" + m_selected_model_name + ")...";
+        m_models.start_download(m_selected_model_name, nullptr, [this](bool success, const std::string& err) {
+            if (success) {
+                m_status_message = "Model ready! Load an audio file to transcribe.";
+                if (m_auto_transcribe_after_download && m_audio_data.is_loaded) {
+                    m_auto_transcribe_after_download = false;
+                    trigger_transcribe();
+                }
+            } else {
+                m_status_message = "Auto-download failed: " + err + ". Click 'Download Selected Model' to retry.";
+            }
+        });
+    } else {
+        m_status_message = "Ready. Open an audio file to begin.";
+    }
 }
 
 void AppUI::handle_dropped_file(const std::string& filepath) {
@@ -148,6 +165,49 @@ void AppUI::render_top_bar() {
     }
 }
 
+void AppUI::trigger_transcribe() {
+    const auto& models = m_models.get_available_models();
+    const ModelInfo* selected_info = nullptr;
+    for (const auto& m : models) {
+        if (m.name == m_selected_model_name) {
+            selected_info = &m;
+            break;
+        }
+    }
+
+    if (!selected_info || !selected_info->is_downloaded) {
+        m_status_message = "Selected model is not downloaded yet.";
+        return;
+    }
+
+    if (!m_audio_data.is_loaded) {
+        m_status_message = "Please load an audio file first.";
+        return;
+    }
+
+    WhisperConfig cfg;
+    cfg.model_path = selected_info->local_path;
+    cfg.language = m_selected_language;
+    cfg.use_gpu = m_use_gpu;
+    cfg.token_timestamps = true;
+    cfg.dtw = true;
+    cfg.num_threads = 4;
+
+    m_status_message = "Transcribing audio word-by-word with DTW alignment...";
+    m_whisper.transcribe_async(m_audio_data.pcm_data, cfg,
+        [this](float /*progress*/, const std::string& /*current_text*/) {},
+        [this](const TranscriptionResult& result) {
+            m_transcription = result;
+            if (result.success) {
+                m_status_message = "Transcription complete! Processed in " + 
+                                   std::to_string(result.processing_time_ms / 1000.0f) + "s";
+            } else {
+                m_status_message = "Transcription error: " + result.error_message;
+            }
+        }
+    );
+}
+
 void AppUI::render_sidebar() {
     ImGui::TextColored(Theme::AccentCyan, "AUDIO INPUT");
     ImGui::Spacing();
@@ -196,18 +256,19 @@ void AppUI::render_sidebar() {
 
     if (selected_info) {
         if (selected_info->is_downloaded) {
-            ImGui::TextColored(Theme::SuccessGreen, "Model is downloaded and ready.");
+            ImGui::TextColored(Theme::SuccessGreen, "● Model downloaded & ready.");
         } else {
-            ImGui::TextColored(Theme::HighlightGold, "Model not downloaded (%s)", selected_info->size_desc.c_str());
+            ImGui::TextColored(Theme::HighlightGold, "○ Not yet downloaded (%s)", selected_info->size_desc.c_str());
 
             if (m_models.is_downloading()) {
                 ImGui::ProgressBar(m_models.get_download_progress(), ImVec2(-1, 24));
                 ImGui::TextWrapped("%s", m_models.get_download_status().c_str());
                 if (ImGui::Button("Cancel Download", ImVec2(-1, 26))) {
                     m_models.cancel_download();
+                    m_auto_transcribe_after_download = false;
                 }
             } else {
-                if (ImGui::Button("Download Selected Model", ImVec2(-1, 32))) {
+                if (ImGui::Button("Pre-Download Selected Model", ImVec2(-1, 30))) {
                     m_models.start_download(m_selected_model_name, nullptr, [this](bool success, const std::string& err) {
                         m_status_message = success ? "Model downloaded successfully!" : ("Download error: " + err);
                     });
@@ -238,53 +299,69 @@ void AppUI::render_sidebar() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // Start Transcribe Button
-    bool can_transcribe = m_audio_data.is_loaded && selected_info && selected_info->is_downloaded && !m_whisper.is_transcribing();
-
+    // Action Button Section (Transcribe / Auto-Download & Transcribe)
     if (m_whisper.is_transcribing()) {
-        ImGui::ProgressBar(m_whisper.get_current_progress(), ImVec2(-1, 30));
+        ImGui::ProgressBar(m_whisper.get_current_progress(), ImVec2(-1, 36));
         ImGui::TextColored(Theme::HighlightGold, "Transcribing with DTW word alignment...");
-        if (ImGui::Button("Cancel Transcription", ImVec2(-1, 32))) {
+        if (ImGui::Button("Cancel Transcription", ImVec2(-1, 30))) {
             m_whisper.cancel_transcription();
         }
-    } else {
-        if (!can_transcribe) {
+    } else if (m_models.is_downloading()) {
+        ImGui::ProgressBar(m_models.get_download_progress(), ImVec2(-1, 36));
+        ImGui::TextColored(Theme::HighlightGold, "%s", m_models.get_download_status().c_str());
+        if (m_auto_transcribe_after_download) {
+            ImGui::TextColored(Theme::AccentCyan, "Auto-transcribe will launch when download finishes.");
+        }
+        if (ImGui::Button("Cancel Download", ImVec2(-1, 28))) {
+            m_models.cancel_download();
+            m_auto_transcribe_after_download = false;
+        }
+    } else if (selected_info && selected_info->is_downloaded) {
+        if (!m_audio_data.is_loaded) {
             ImGui::BeginDisabled();
         }
 
         ImGui::PushStyleColor(ImGuiCol_Button, Theme::AccentPurple);
-        if (ImGui::Button("START TRANSCRIBE", ImVec2(-1, 40))) {
-            WhisperConfig cfg;
-            cfg.model_path = selected_info->local_path;
-            cfg.language = m_selected_language;
-            cfg.use_gpu = m_use_gpu;
-            cfg.token_timestamps = true;
-            cfg.dtw = true;
-            cfg.num_threads = 4;
-
-            m_status_message = "Transcribing audio word-by-word...";
-            m_whisper.transcribe_async(m_audio_data.pcm_data, cfg,
-                [this](float /*progress*/, const std::string& /*current_text*/) {},
-                [this](const TranscriptionResult& result) {
-                    m_transcription = result;
-                    if (result.success) {
-                        m_status_message = "Transcription complete! Processed in " + 
-                                           std::to_string(result.processing_time_ms / 1000.0f) + "s";
-                    } else {
-                        m_status_message = "Transcription error: " + result.error_message;
-                    }
-                }
-            );
+        if (ImGui::Button("START TRANSCRIBE", ImVec2(-1, 42))) {
+            trigger_transcribe();
         }
         ImGui::PopStyleColor();
 
-        if (!can_transcribe) {
+        if (!m_audio_data.is_loaded) {
             ImGui::EndDisabled();
-            if (!m_audio_data.is_loaded) {
-                ImGui::TextColored(Theme::TextMuted, "Load an audio file first.");
-            } else if (!selected_info || !selected_info->is_downloaded) {
-                ImGui::TextColored(Theme::TextMuted, "Download the model first.");
-            }
+            ImGui::TextColored(Theme::TextMuted, "Open or drop an audio file first.");
+        }
+    } else {
+        // Model is missing: Auto-download and transcribe in one seamless click!
+        if (!m_audio_data.is_loaded) {
+            ImGui::BeginDisabled();
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Button, Theme::HighlightGold);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.09f, 0.12f, 1.0f));
+        if (ImGui::Button("⚡ DOWNLOAD MODEL & TRANSCRIBE", ImVec2(-1, 42))) {
+            m_auto_transcribe_after_download = true;
+            m_status_message = "Auto-downloading " + m_selected_model_name + "...";
+            m_models.start_download(m_selected_model_name, nullptr, [this](bool success, const std::string& err) {
+                if (success) {
+                    m_status_message = "Model downloaded! Starting transcription...";
+                    if (m_auto_transcribe_after_download && m_audio_data.is_loaded) {
+                        m_auto_transcribe_after_download = false;
+                        trigger_transcribe();
+                    }
+                } else {
+                    m_status_message = "Auto-download failed: " + err;
+                    m_auto_transcribe_after_download = false;
+                }
+            });
+        }
+        ImGui::PopStyleColor(2);
+
+        if (!m_audio_data.is_loaded) {
+            ImGui::EndDisabled();
+            ImGui::TextColored(Theme::TextMuted, "Drop audio to auto-download & transcribe.");
+        } else {
+            ImGui::TextColored(Theme::AccentCyan, "One click will download model and transcribe.");
         }
     }
 

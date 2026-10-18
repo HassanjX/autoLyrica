@@ -6,8 +6,33 @@
 #include <windows.h>
 #include <wininet.h>
 
-ModelManager::ModelManager(const std::string& models_dir) : m_models_dir(models_dir) {
-    CreateDirectoryA(models_dir.c_str(), NULL);
+ModelManager::ModelManager(const std::string& models_dir) {
+    char exe_path[MAX_PATH];
+    if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
+        std::string exe_str = exe_path;
+        size_t last_slash = exe_str.find_last_of("\\/");
+        if (last_slash != std::string::npos) {
+            std::string exe_dir = exe_str.substr(0, last_slash);
+            m_models_dir = exe_dir + "/models";
+        }
+    }
+    if (m_models_dir.empty()) {
+        m_models_dir = models_dir;
+    }
+
+    // Create directory, fallback to %LOCALAPPDATA% if write restricted
+    if (!CreateDirectoryA(m_models_dir.c_str(), NULL)) {
+        DWORD err = GetLastError();
+        if (err == ERROR_ACCESS_DENIED) {
+            char appdata_path[MAX_PATH];
+            if (GetEnvironmentVariableA("LOCALAPPDATA", appdata_path, MAX_PATH) > 0) {
+                std::string user_base = std::string(appdata_path) + "/autoLyrica";
+                CreateDirectoryA(user_base.c_str(), NULL);
+                m_models_dir = user_base + "/models";
+                CreateDirectoryA(m_models_dir.c_str(), NULL);
+            }
+        }
+    }
 
     // Standard Hugging Face Whisper GGML repository models
     m_models = {
@@ -30,15 +55,23 @@ ModelManager::~ModelManager() {
 void ModelManager::refresh_local_models() {
     std::vector<std::string> candidate_dirs = { m_models_dir, "models", "../models", "../../models" };
 
-    // Also add executable directory / models
+    // Also add executable directory and %LOCALAPPDATA%
     char exe_path[MAX_PATH];
     if (GetModuleFileNameA(NULL, exe_path, MAX_PATH) > 0) {
         std::string exe_str = exe_path;
         size_t last_slash = exe_str.find_last_of("\\/");
         if (last_slash != std::string::npos) {
-            candidate_dirs.push_back(exe_str.substr(0, last_slash) + "/models");
-            candidate_dirs.push_back(exe_str.substr(0, last_slash) + "/../../models");
+            std::string exe_dir = exe_str.substr(0, last_slash);
+            candidate_dirs.push_back(exe_dir + "/models");
+            candidate_dirs.push_back(exe_dir);
+            candidate_dirs.push_back(exe_dir + "/../../models");
         }
+    }
+
+    char appdata_path[MAX_PATH];
+    if (GetEnvironmentVariableA("LOCALAPPDATA", appdata_path, MAX_PATH) > 0) {
+        candidate_dirs.push_back(std::string(appdata_path) + "/autoLyrica/models");
+        candidate_dirs.push_back(std::string(appdata_path) + "/autoLyrica");
     }
 
     for (auto& m : m_models) {
@@ -127,10 +160,24 @@ bool ModelManager::start_download(const std::string& model_name,
         DWORD header_idx = 0;
         HttpQueryInfoA(hUrl, HTTP_QUERY_CONTENT_LENGTH | HTTP_QUERY_FLAG_NUMBER, &content_length, &length_size, &header_idx);
 
+        CreateDirectoryA(m_models_dir.c_str(), NULL);
         std::string dest_path = m_models_dir + "/" + target_info.filename;
         std::string part_path = dest_path + ".part";
 
         std::ofstream out_file(part_path, std::ios::binary);
+        if (!out_file.is_open()) {
+            char appdata_path[MAX_PATH];
+            if (GetEnvironmentVariableA("LOCALAPPDATA", appdata_path, MAX_PATH) > 0) {
+                std::string user_base = std::string(appdata_path) + "/autoLyrica";
+                CreateDirectoryA(user_base.c_str(), NULL);
+                m_models_dir = user_base + "/models";
+                CreateDirectoryA(m_models_dir.c_str(), NULL);
+                dest_path = m_models_dir + "/" + target_info.filename;
+                part_path = dest_path + ".part";
+                out_file.open(part_path, std::ios::binary);
+            }
+        }
+
         if (!out_file.is_open()) {
             InternetCloseHandle(hUrl);
             InternetCloseHandle(hInternet);

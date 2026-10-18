@@ -4,6 +4,9 @@ project(autoLyrica LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Fully static C/C++ runtime (/MT) so the binary runs on any Windows machine without requiring VC++ Redistributable
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 add_compile_definitions(NOMINMAX)
 
 # Configure whisper.cpp options before adding subdirectory
@@ -11,6 +14,7 @@ set(WHISPER_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
 
 # Use high-performance CPU AVX2 backend (CUDA 13 dropped support for sm_61 / GTX 1050 Ti)
 set(GGML_CUDA OFF CACHE BOOL "" FORCE)

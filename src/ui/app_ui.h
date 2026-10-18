@@ -41,11 +41,14 @@ private:
     std::string m_status_message;
     std::string m_selected_model_name;
     std::string m_selected_language = "auto";
-    bool m_use_gpu = true;
+    bool m_use_gpu = false;
     bool m_should_exit = false;
+    void trigger_transcribe();
 
     // Waveform / Timeline
     float m_volume = 0.85f;
     bool m_is_seeking = false;
     float m_seek_target_ratio = 0.0f;
+    bool m_auto_transcribe_after_download = false;
 };
+
